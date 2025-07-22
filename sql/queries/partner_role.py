@@ -1,7 +1,7 @@
+import ibm_db
 
-def get_partner_role(user_id, cursor):
-
-
+def get_partner_role(user_id, conn):
+    
     try:
         query = """
         SELECT se.EXTENSION_KEY, se.EXTENSION_VALUE
@@ -11,19 +11,25 @@ def get_partner_role(user_id, cursor):
         AND se.EXTENSION_KEY IN ('DMIROUTE_WILLPRODUCE', 'DMIROUTE_WILLCONSUME')
         """
 
-        cursor.execute(query, (user_id,))
-        results = cursor.fetchall()
+        # Prepare and execute statement
+        stmt = ibm_db.prepare(conn, query)
+        ibm_db.execute(stmt, (user_id,))
 
         # Flags for producer and consumer
         will_produce = False
         will_consume = False
 
-        for extension_key, extension_value in results:
-            val = (extension_value or '').strip().upper()
+        row = ibm_db.fetch_assoc(stmt)
+        while row:
+            extension_key = row['EXTENSION_KEY']
+            extension_value = (row['EXTENSION_VALUE'] or '').strip().upper()
+
             if extension_key == 'DMIROUTE_WILLPRODUCE':
-                will_produce = (val == 'TRUE')
+                will_produce = (extension_value == 'TRUE')
             elif extension_key == 'DMIROUTE_WILLCONSUME':
-                will_consume = (val == 'TRUE')
+                will_consume = (extension_value == 'TRUE')
+
+            row = ibm_db.fetch_assoc(stmt)
 
         # Determine role
         if will_produce and not will_consume:
