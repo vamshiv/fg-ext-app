@@ -1,0 +1,128 @@
+WITH user_ids (USER_ID) AS (
+    VALUES
+        'value1',
+        'value2',
+        'value3'
+)
+
+SELECT 
+    -- Profile Section
+    yfs_org.ORGANIZATION_NAME        AS "Partner Name",
+    yfs_org.ORGANIZATION_CODE        AS "Partner Code",
+    person_info.ADDRESS_LINE_1       AS "Address",
+    person_info.DAY_PHONE            AS "Phone",
+    person_info.EMAILID              AS "Email Address",
+
+    -- User Account Section
+    ysf_user.USERNAME                AS "User Name",
+    ysf_user.USERTYPE                AS "Authentication Type",
+    pwd_policy.POLICY_NAME           AS "Password Policy",
+    ysf_user.SESSION_TIMEOUT         AS "Session Timeout (Min)",
+    person_info.FIRST_NAME           AS "Given Name",
+    person_info.LAST_NAME            AS "Surname",
+
+    -- Protocol Section
+    CASE 
+        WHEN exts.DMIROUTE_WILLPRODUCE = 'TRUE' AND exts.DMIROUTE_WILLCONSUME = 'FALSE' THEN 'PRODUCER'
+        WHEN exts.DMIROUTE_WILLPRODUCE = 'FALSE' AND exts.DMIROUTE_WILLCONSUME = 'TRUE' THEN 'CONSUMER'
+        WHEN exts.DMIROUTE_WILLPRODUCE = 'TRUE' AND exts.DMIROUTE_WILLCONSUME = 'TRUE' THEN 'PRODUCER & CONSUMER'
+        ELSE NULL
+    END AS "Partner Role",
+
+    -- Connection Direction
+    exts.CONSUMERCONNECTION          AS "Connection Direction",
+
+    -- SSH/SFTP Protocols
+    exts.SFTPSCPENABLED               AS "SSH/SFTP or SSH/SCP protocols to initiate connections?",
+
+    -- Transport Method Section
+    exts.PRISendSFTP_SSHLocation      AS "Internal or External",
+    sftp.NAME                         AS "SFTP Profile",
+    exts.PRISendCD_CompletionReportEmail AS "Completion Report Email",
+    exts.PRISendCD_ErrorReportEmail   AS "Error Report Email",
+    exts.PRISendCD_PartnerCommonName  AS "Enter the partner common name",
+    exts.PGP_C_SIGN                   AS "Does xx require data to be signed by the Router",
+    exts.PGP_C_ENCRYPT                AS "Does xx require data to be encrypted by the Router",
+
+    -- Community Membership Section
+    sc.OBJECT_NAME                    AS "Community Name",
+    sctx.DATE_JOINED                  AS "Joined Date",
+
+    -- Associated Consumers Section
+    LISTAGG(DISTINCT cx.receiver_item, ', ')
+        WITHIN GROUP (ORDER BY cx.receiver_item) AS "Associated consumers"
+
+FROM 
+    SCI_CODE_USR_XREF sci_xref
+
+JOIN user_ids u
+    ON sci_xref.USER_ID = u.USER_ID
+
+LEFT JOIN 
+    YFS_ORGANIZATION yfs_org 
+    ON sci_xref.TP_OBJECT_ID = yfs_org.OBJECT_ID
+
+LEFT JOIN 
+    YFS_PERSON_INFO person_info 
+    ON yfs_org.CORPORATE_ADDRESS_KEY = person_info.PERSON_INFO_KEY
+
+LEFT JOIN 
+    YSF_USER ysf_user 
+    ON sci_xref.USER_ID = ysf_user.ORGANIZATION_KEY
+
+LEFT JOIN 
+    PWD_POLICY pwd_policy 
+    ON ysf_user.PASSWORD_POLICY_ID = pwd_policy.POLICY_ID
+
+-- Join all relevant extensions
+LEFT JOIN (
+    SELECT 
+        ENTITY_ID,
+        MAX(CASE WHEN EXTENSION_KEY = 'DMIROUTE_WILLPRODUCE' THEN EXTENSION_VALUE END) AS DMIROUTE_WILLPRODUCE,
+        MAX(CASE WHEN EXTENSION_KEY = 'DMIROUTE_WILLCONSUME' THEN EXTENSION_VALUE END) AS DMIROUTE_WILLCONSUME,
+        MAX(CASE WHEN EXTENSION_KEY = 'CONSUMERCONNECTION' THEN EXTENSION_VALUE END) AS CONSUMERCONNECTION,
+        MAX(CASE WHEN EXTENSION_KEY = 'SFTPSCPENABLED' THEN EXTENSION_VALUE END) AS SFTPSCPENABLED,
+        MAX(CASE WHEN EXTENSION_KEY = 'PRISendSFTP_SSHLocation' THEN EXTENSION_VALUE END) AS PRISendSFTP_SSHLocation,
+        MAX(CASE WHEN EXTENSION_KEY = 'PRISendSFTP_SSHProfile' THEN EXTENSION_VALUE END) AS PRISendSFTP_SSHProfile,
+        MAX(CASE WHEN EXTENSION_KEY = 'PRISendCD_CompletionReportEmail' THEN EXTENSION_VALUE END) AS PRISendCD_CompletionReportEmail,
+        MAX(CASE WHEN EXTENSION_KEY = 'PRISendCD_ErrorReportEmail' THEN EXTENSION_VALUE END) AS PRISendCD_ErrorReportEmail,
+        MAX(CASE WHEN EXTENSION_KEY = 'PRISendCD_PartnerCommonName' THEN EXTENSION_VALUE END) AS PRISendCD_PartnerCommonName,
+        MAX(CASE WHEN EXTENSION_KEY = 'PGP_C_SIGN' THEN EXTENSION_VALUE END) AS PGP_C_SIGN,
+        MAX(CASE WHEN EXTENSION_KEY = 'PGP_C_ENCRYPT' THEN EXTENSION_VALUE END) AS PGP_C_ENCRYPT
+    FROM SCI_ENTITY_EXTNS
+    GROUP BY ENTITY_ID
+) exts
+    ON exts.ENTITY_ID = sci_xref.TP_OBJECT_ID
+
+-- Resolve SFTP profile name
+LEFT JOIN SFTP_PROF sftp
+    ON sftp.NAME = exts.PRISendSFTP_SSHProfile
+
+-- Community Membership
+LEFT JOIN SCI_PROFILE sp
+    ON sp.ENTITY_ID = yfs_org.OBJECT_ID
+
+LEFT JOIN SCI_COMM_TP_XREF sctx
+    ON sctx.TP_PROFILE_ID = sp.OBJECT_ID
+
+LEFT JOIN SCI_COMMUNITY sc
+    ON sc.OBJECT_ID = sctx.COMMUNITY_ID
+
+-- Associated Consumers
+LEFT JOIN codelist_xref_item cx
+    ON cx.sender_item = sci_xref.USER_ID
+
+LEFT JOIN codelist_xref_vers cv
+    ON cx.list_name = cv.list_name
+   AND cx.list_version = cv.default_version
+
+GROUP BY 
+    yfs_org.ORGANIZATION_NAME, yfs_org.ORGANIZATION_CODE,
+    person_info.ADDRESS_LINE_1, person_info.DAY_PHONE, person_info.EMAILID,
+    ysf_user.USERNAME, ysf_user.USERTYPE, pwd_policy.POLICY_NAME, 
+    ysf_user.SESSION_TIMEOUT, person_info.FIRST_NAME, person_info.LAST_NAME,
+    exts.DMIROUTE_WILLPRODUCE, exts.DMIROUTE_WILLCONSUME,
+    exts.CONSUMERCONNECTION, exts.SFTPSCPENABLED, exts.PRISendSFTP_SSHLocation,
+    sftp.NAME, exts.PRISendCD_CompletionReportEmail, exts.PRISendCD_ErrorReportEmail,
+    exts.PRISendCD_PartnerCommonName, exts.PGP_C_SIGN, exts.PGP_C_ENCRYPT,
+    sc.OBJECT_NAME, sctx.DATE_JOINED
